@@ -94,11 +94,28 @@
 
 **第 0 步：锁定实验定义。****已完成。**§1.0 / §1.1 / §1.2 已确认；机器可读配置见 `config.yaml` 与 `ds_zero2.json`。[论文附录](https://arxiv.org/html/2605.18309)
 
-**第 1 步：下载、划分并检查数据。**按 `config.yaml` 落盘主实验 8192 复用划分、互斥对照各 6144、校准/测试各 2000 与前缀。`test` 题绝不混入训练。人工检查 10 条 IMDb/Alpaca token–label。
+**第 1 步：下载、划分并检查数据。****已完成。**产物在 `data/splits/`（`manifest.json`）；互斥 Stage1/3 overlap = 0。
 
-**第 2 步：做最小通路测试。**加载模型，训练 20–50 步，完成保存、重载、生成和分类。只验证程序、显存和吞吐；冻 `requirements.lock.txt`。
+**第 2 步：做最小通路测试。****已完成。**4 卡 ZeRO-2 训练 32 步 → 保存 → 重载 → 生成 → RoBERTa 打分。指标见 `outputs/pathway/`（约 2.6 s/step，本 rank 峰值显存约 18 GB）；依赖已冻为 `requirements.lock.txt`。
+```
+deepspeed --num_gpus=4 pathway_smoke.py --stage train --max-steps 32
+CUDA_VISIBLE_DEVICES=0 python pathway_smoke.py --stage eval
+```
 
-**第 3 步：预热并冻结共同起点。**Alpaca **1 epoch** → \(W_0\)；校准题上评 \(S_0\)。所有后续分支从**同一个 \(W_0\)** 出发。
+**第 3 步：预热并冻结共同起点。****已完成。**Alpaca 1 epoch → `outputs/warmup/W0`（3235 步）；校准集 2000 题生成并打分，\(S_0=\) **`positive_rate_S = 0.261`**（见 `outputs/warmup/S0_calib_scored.summary.json`）。后续分支均从该 \(W_0\) 出发。
+```bash
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+deepspeed --num_gpus=4 train_sft.py --mode warmup --config config.yaml
+CUDA_VISIBLE_DEVICES=0 python generate_eval.py \
+  --config config.yaml \
+  --model outputs/warmup/W0 \
+  --prompts data/splits/calib_2000.jsonl \
+  --output outputs/warmup/S0_calib_generations.jsonl
+CUDA_VISIBLE_DEVICES=0 python score_eval.py \
+  --config config.yaml \
+  --generations outputs/warmup/S0_calib_generations.jsonl \
+  --output outputs/warmup/S0_calib_scored.jsonl
+```
 
 **第 4 步：Stage 1 正面训练。**候选深度 128/256/512；若过早饱和，只依据校准集改档并在正式三种子前锁定。全局 batch 16 下 8192 条 → 512 优化步。
 
