@@ -1,0 +1,157 @@
+# Experiment definition — Step 0 locked (see README §1.0 / §1.1 / §1.2).
+# Implementation choices in §1.2 are OUR declarations, not verified author configs.
+
+experiment:
+  name: imdb_rehearsal_priming_gemma2_2b
+  status: step0_locked
+  notes: >
+    Reproduce behavioral rehearsal priming on IMDb with Gemma-2-2B base.
+    Conclusions report behavioral relearning speed only; do not claim mechanism.
+
+# --- §1.0 research decisions ---
+research:
+  main_positive_reuse: true
+  disjoint_control: true
+  disjoint_n_per_stage: 6144          # per side; divisible by global_batch 16 → 384 steps
+  disjoint_keep_steps_matched: true
+  primary_task: imdb                  # BeaverTails only after IMDb phase
+  conclusion_scope: behavioral_acceleration_only
+  match_exclude_unreliable_branches: true
+  primary_metric: baseline_adjusted_curve_area
+  secondary_metric: steps_to_target_score
+  trial_metric_window_steps: 128
+  formal_metric_window_steps: null    # lock after trial, before formal runs
+  target_score: null                  # lock after trial from shared attainable band
+
+# --- resources (HF revisions = currently downloaded; re-pin after pathway if needed) ---
+model:
+  name_or_path: google/gemma-2-2b
+  revision: c5ebcd40d208330abc697524c919956e692655cf
+  trust_remote_code: false
+
+warmup_data:
+  name: yahma/alpaca-cleaned
+  revision: 12567cabf869d7c92e573c7c783905fc160e9639
+
+imdb:
+  name: stanfordnlp/imdb
+  revision: e6281661ce1c48d982bc483cf8a173c1bbeb5d31
+
+classifier:
+  name_or_path: j-hartmann/sentiment-roberta-large-english-3-classes
+  revision: 81cdc0fe3eee1bc18d95ffdfb56b2151a39c9007
+  positive_label: positive
+  score_map:
+    positive: 1
+    neutral: 0
+    negative: 0
+
+# --- §1.1 + §1.2 training ---
+train:
+  full_finetune: true
+  trainer: trl.SFTTrainer
+  deepspeed_config: ds_zero2.json
+  learning_rate: 5.0e-7
+  lr_scheduler_type: constant
+  warmup_steps: 0
+  weight_decay: 0.0
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  max_seq_length: 512
+  packing: false
+  bf16: true
+  gradient_checkpointing: true
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 1
+  global_batch_size: 16               # 4 GPUs × 4 × accum 1; NOT directly reported by paper
+  num_gpus_paper: 4
+  reset_optimizer_each_stage: true
+  seeds: [11, 23, 37]
+
+warmup:
+  num_epochs: 1
+  # loss only on output; template below
+  template: |
+    ### Instruction:
+    {instruction}
+
+    ### Input:
+    {input}
+
+    ### Response:
+    {output}
+  # If input is empty, drop the "### Input:" block when formatting (implement in prepare/train).
+  loss_on: output_only
+  add_eos: true
+
+imdb_sft:
+  wrap_chat_or_instruction: false
+  add_bos: true
+  add_eos: true
+  loss_ignore: [bos, padding]         # compute loss on review tokens only
+  n_per_stage_main: 8192
+  stage1_stage3_reuse_positive: true
+  stage1_depth_candidates: [128, 256, 512]   # may retune on calibration only, before formal 3-seed
+
+# --- data splits / eval prompts ---
+data_splits:
+  train_source: imdb.train
+  calib_n: 2000
+  test_n: 2000
+  calib_test_disjoint: true
+  balance_pos_neg: true
+  prefix_tokenizer: gemma             # same tokenizer as trained model
+  prefix_len_min: 2
+  prefix_len_max: 8
+  prefix_len_from: example_id_hash    # hash(example_id) → {2..8}
+  same_prompts_all_checkpoints: true
+
+# --- generation & scoring ---
+generation:
+  do_sample: true
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0
+  max_new_tokens: 128
+  stop_at_eos: true
+  samples_per_prompt_default: 1
+
+# --- Stage 2 matching (§1.1 + §1.0 sampling budget) ---
+matching:
+  coarse_eval_every_steps: 128
+  then_eval_every_step: true
+  abs_diff_threshold: 0.005
+  score_on: calibration
+  samples_per_prompt_default: 1
+  samples_per_prompt_refine: 5        # locked budget when fluctuation is too large
+  refine_when_abs_diff_below: 0.02    # enter refine sampling near the match band
+  exclude_if_unreliable: true
+
+# --- Stage 3 eval schedule ---
+stage3_eval:
+  every_steps_until_128: 8
+  every_steps_after_128: 32
+
+# --- S0 definition ---
+s0:
+  definition: score_of_warmup_checkpoint_on_calibration
+  save_weights: true
+  save_per_example_generations: true
+
+# --- software pins (fill/confirm after pathway smoke test) ---
+software:
+  python: "3.13"
+  torch: "2.14.0+cu130"
+  transformers: "5.17.0"
+  trl: "1.14.0"
+  datasets: "5.0.1"
+  accelerate: "1.15.0"
+  deepspeed: "0.19.7"
+  note: Also freeze via requirements.lock.txt after pathway; do not upgrade mid-experiment.
+
+paths:
+  data_dir: data
+  output_dir: outputs
+  splits_dir: data/splits

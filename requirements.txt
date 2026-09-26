@@ -1,0 +1,28 @@
+# --- 核心训练栈（与 README: TRL SFT + DeepSpeed ZeRO-2 对齐）---
+# torch 建议单独用官方 CUDA wheel 安装，见下方说明；此处仅作占位
+# torch>=2.2.0
+transformers>=4.44.0
+trl>=0.9.0
+datasets>=2.20.0
+accelerate>=0.33.0
+deepspeed>=0.14.0
+huggingface_hub>=0.24.0
+tokenizers>=0.19.0
+safetensors>=0.4.0
+
+# --- 配置与工具 ---
+pyyaml>=6.0.1
+tqdm>=4.66.0
+numpy>=1.26.0
+pandas>=2.2.0
+
+# --- 评测 / 绘图 / 统计（README: 绘图及统计库）---
+scipy>=1.11.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+scikit-learn>=1.4.0
+
+# --- tokenizer / 模型加载常见依赖 ---
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+einops>=0.8.0
