@@ -117,10 +117,19 @@ CUDA_VISIBLE_DEVICES=0 python score_eval.py \
   --output outputs/warmup/S0_calib_scored.jsonl
 ```
 
-**第 4 步：Stage 1 正面训练。**从 \(W_0\) 起，在主实验 8192 条正面影评上全参数 SFT；候选深度 128/256/512（全局 batch 16 → 满跑 512 步）。一次训练在 `--save-depths` 处落盘可评测的合并权重；若校准集上过早饱和，只据此改档，正式三种子前锁定深度。
+**第 4 步：Stage 1 正面训练。****已完成（种子 11 试跑）。**从 \(W_0\) 起在 `main_positive_8192` 上训满 512 步（≈45 min，本 rank 峰值显存 ≈17.8 GB），并在 128/256/512 落盘；校准集 2000 题、4 卡并行生成后打分如下（\(S_0=0.261\)）：
+
+| Stage 1 深度 | 校准 `positive_rate_S` | \(\Delta S_0\) |
+|---|---:|---:|
+| 128 | **0.292** | +0.031 |
+| 256 | **0.345** | +0.084 |
+| 512 | **0.313** | +0.052 |
+
+**深度锁定：**未见过早饱和（128 仅小幅抬升；三者均远未贴顶），正式主分支锁定 **Stage 1 = 512 步**（`outputs/stage1/main_pos_seed11/depth_512`）。256→512 非单调，记为单次采样波动，不据此改浅；三种子正式跑前若复现再议。产物：`outputs/stage1/main_pos_seed11/`（`train_metrics.json`、`depth_*`、`calib_scored_d*.summary.json`）。
 ```bash
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 # 4a. 训练（种子 11 试跑；优化器从 W0 权重新建，不恢复旧态）
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
 deepspeed --num_gpus=4 train_sft.py --mode imdb \
   --config config.yaml \
   --model outputs/warmup/W0 \
@@ -133,22 +142,20 @@ deepspeed --num_gpus=4 train_sft.py --mode imdb \
 # 4b. 各深度在校准集上生成并打分（判断是否过早饱和；正式深度锁定前只看 calib）
 # generate：4 卡按题号分片并行（i % 4 == rank）；score 仍单卡即可
 for D in 128 256 512; do
-  CUDA_VISIBLE_DEVICES=0,1,2,3 python generate_eval.py \
+  CUDA_VISIBLE_DEVICES=4,5,6,7 python generate_eval.py \
     --config config.yaml \
     --model outputs/stage1/main_pos_seed11/depth_${D} \
     --prompts data/splits/calib_2000.jsonl \
     --output outputs/stage1/main_pos_seed11/calib_gen_d${D}.jsonl \
     --num-gpus 4
-  CUDA_VISIBLE_DEVICES=0 python score_eval.py \
+  CUDA_VISIBLE_DEVICES=7 python score_eval.py \
     --config config.yaml \
     --generations outputs/stage1/main_pos_seed11/calib_gen_d${D}.jsonl \
     --output outputs/stage1/main_pos_seed11/calib_scored_d${D}.jsonl
 done
-# 比较 outputs/stage1/main_pos_seed11/calib_scored_d*.summary.json 的 positive_rate_S；
-# 若 128/256 已接近饱和，改用更浅档并在正式 [11,23,37] 前写入记录。
 ```
 
-**第 5 步：Stage 2 反向训练与匹配。**每 128 步粗评，窗口内逐步评测，\(\lvert S-S_0\rvert<0.005\)。靠近匹配带时每题采至 5 条；仍不可靠则分支不入主比较。[论文匹配协议](https://arxiv.org/html/2605.18309)
+**第 5 步：Stage 2 反向训练与匹配。****下一步（尚未跑）。**从锁定的 Stage 1（`depth_512`）出发，在 `main_negative_8192` 上反向 SFT；每 128 步粗评校准集，窗口内逐步评测，目标 \(\lvert S-S_0\rvert<0.005\)（\(S_0=0.261\)）。靠近匹配带（\(|S-S_0|<0.02\)）时每题采至 5 条；仍不可靠则该分支不入主比较。需先补齐 `match_checkpoint.py`（及 Stage 2 存盘/评测循环）再开训。[论文匹配协议](https://arxiv.org/html/2605.18309)
 
 **第 6 步：Stage 3 同步比较。**已匹配检查点与 \(W_0\) 对照；前 128 步每 8 步评、之后每 32 步。
 

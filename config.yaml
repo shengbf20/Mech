@@ -3,10 +3,11 @@
 
 experiment:
   name: imdb_rehearsal_priming_gemma2_2b
-  status: step3_warmup_s0_ok   # next: step4 Stage-1 positive (depths 128/256/512)
+  status: step4_stage1_depth512_locked
   notes: >
     Reproduce behavioral rehearsal priming on IMDb with Gemma-2-2B base.
     Conclusions report behavioral relearning speed only; do not claim mechanism.
+    Stage1 seed11 calib S: d128=0.292 d256=0.345 d512=0.313 (S0=0.261); lock depth=512.
 
 # --- §1.0 research decisions ---
 research:
@@ -93,7 +94,8 @@ imdb_sft:
   loss_ignore: [bos, padding]         # compute loss on review tokens only
   n_per_stage_main: 8192
   stage1_stage3_reuse_positive: true
-  stage1_depth_candidates: [128, 256, 512]   # may retune on calibration only, before formal 3-seed
+  stage1_depth_candidates: [128, 256, 512]   # trial scanned; lock below before formal 3-seed
+  stage1_depth_locked: 512                  # seed11 calib: no early saturation; see README §4 step4
 
 # --- data splits / eval prompts ---
 data_splits:
