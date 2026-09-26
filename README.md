@@ -131,12 +131,14 @@ deepspeed --num_gpus=4 train_sft.py --mode imdb \
   --seed 11
 
 # 4b. 各深度在校准集上生成并打分（判断是否过早饱和；正式深度锁定前只看 calib）
+# generate：4 卡按题号分片并行（i % 4 == rank）；score 仍单卡即可
 for D in 128 256 512; do
-  CUDA_VISIBLE_DEVICES=0 python generate_eval.py \
+  CUDA_VISIBLE_DEVICES=0,1,2,3 python generate_eval.py \
     --config config.yaml \
     --model outputs/stage1/main_pos_seed11/depth_${D} \
     --prompts data/splits/calib_2000.jsonl \
-    --output outputs/stage1/main_pos_seed11/calib_gen_d${D}.jsonl
+    --output outputs/stage1/main_pos_seed11/calib_gen_d${D}.jsonl \
+    --num-gpus 4
   CUDA_VISIBLE_DEVICES=0 python score_eval.py \
     --config config.yaml \
     --generations outputs/stage1/main_pos_seed11/calib_gen_d${D}.jsonl \
