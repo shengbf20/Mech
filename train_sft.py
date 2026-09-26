@@ -36,7 +36,7 @@ from common import alpaca_prompt_completion, is_main_process, load_config, load_
 
 
 class SaveDepthsCallback(TrainerCallback):
-    """Save consolidated HF weights at Stage-1 candidate depths (usable by generate_eval)."""
+    """Save consolidated HF weights at selected steps (usable by generate_eval)."""
 
     def __init__(self, depths: set[int], out_dir: Path) -> None:
         self.depths = depths
@@ -56,7 +56,7 @@ class SaveDepthsCallback(TrainerCallback):
             tok.save_pretrained(str(dest))
         if is_main_process():
             self.saved.append(step)
-            print(f"[save-depths] consolidated weights → {dest}")
+            print(f"[save-depths] consolidated weights → {dest}", flush=True)
 
 
 def build_dataset(cfg: dict[str, Any], root: Path, mode: str, data_path: Path) -> Dataset:
@@ -84,6 +84,12 @@ def parse_depths(raw: str | None) -> set[int]:
     if not raw:
         return set()
     return {int(x.strip()) for x in raw.split(",") if x.strip()}
+
+
+def depths_from_every(save_every: int, max_steps: int) -> set[int]:
+    if save_every <= 0:
+        raise ValueError("save_every must be > 0")
+    return set(range(save_every, max_steps + 1, save_every))
 
 
 def make_sft_args(
@@ -181,6 +187,12 @@ def main() -> None:
         default=None,
         help="Comma-separated steps to dump consolidated HF weights (e.g. 128,256,512).",
     )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=None,
+        help="Also save consolidated HF weights every N steps (union with --save-depths).",
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--local_rank", type=int, default=-1)
     args = parser.parse_args()
@@ -190,6 +202,10 @@ def main() -> None:
     seed = int(args.seed if args.seed is not None else cfg["train"]["seeds"][0])
     set_seed(seed)
     depths = parse_depths(args.save_depths)
+    if args.save_every is not None:
+        if args.max_steps is None:
+            raise SystemExit("--save-every requires --max-steps")
+        depths |= depths_from_every(int(args.save_every), int(args.max_steps))
 
     if args.mode == "warmup":
         data_path = args.data or (root / cfg["paths"]["splits_dir"] / "alpaca_warmup_order.jsonl")
@@ -261,6 +277,7 @@ def main() -> None:
             "seed": seed,
             "max_steps": args.max_steps,
             "save_depths": sorted(depths) if depths else [],
+            "save_every": args.save_every,
             "train_loss": float(result.training_loss)
             if hasattr(result, "training_loss")
             else None,

@@ -155,7 +155,36 @@ for D in 128 256 512; do
 done
 ```
 
-**第 5 步：Stage 2 反向训练与匹配。****下一步（尚未跑）。**从锁定的 Stage 1（`depth_512`）出发，在 `main_negative_8192` 上反向 SFT；每 128 步粗评校准集，窗口内逐步评测，目标 \(\lvert S-S_0\rvert<0.005\)（\(S_0=0.261\)）。靠近匹配带（\(|S-S_0|<0.02\)）时每题采至 5 条；仍不可靠则该分支不入主比较。需先补齐 `match_checkpoint.py`（及 Stage 2 存盘/评测循环）再开训。[论文匹配协议](https://arxiv.org/html/2605.18309)
+**第 5 步：Stage 2 反向训练与匹配。****待跑。**从锁定 Stage 1（`depth_512`）出发，在 `main_negative_8192` 上反向 SFT，并按论文协议层次化匹配 \(S_0=0.261\)（\(|S-S_0|<0.005\)；靠近 \(0.02\) 带时每题 5 条）。
+
+新增脚本：`stage2_run.py`（编排）、`match_checkpoint.py`（打分+选点）；`train_sft.py` 支持 `--save-every`。匹配策略：粗评每 128 步 → 窗口内每 16 步 → 最优点 ±8 逐步；避免存满 128 个整模。
+
+```bash
+cd /home/u-shengbf/mech
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# 建议空闲卡：与第 4 步一致用 4–7
+GPUS=4,5,6,7
+SCORE_GPU=7
+
+# 一键：coarse → medium → fine（已匹配则提前结束）
+python stage2_run.py --phase all \
+  --stage1 outputs/stage1/main_pos_seed11/depth_512 \
+  --data data/splits/main_negative_8192.jsonl \
+  --output outputs/stage2/main_neg_seed11 \
+  --seed 11 \
+  --max-steps 512 \
+  --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU --num-gpus 4
+
+# 或分阶段（可断点续跑；已有 depth_* 会跳过训练，加 --force-retrain 可重训）
+python stage2_run.py --phase coarse --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU
+python stage2_run.py --phase medium --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU
+python stage2_run.py --phase fine   --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU
+
+# 仅对已有 depth_* 重新匹配 / 出报告
+python stage2_run.py --phase match --gen-gpus $GPUS --score-gpu $SCORE_GPU
+```
+
+成功标志：`outputs/stage2/main_neg_seed11/MATCHED.json` 中 `matched=true`，选用 `depth_<selected_step>/`。若最终仍 `matched=false`，该分支不入主比较（§1.0）。[论文匹配协议](https://arxiv.org/html/2605.18309)
 
 **第 6 步：Stage 3 同步比较。**已匹配检查点与 \(W_0\) 对照；前 128 步每 8 步评、之后每 32 步。
 
