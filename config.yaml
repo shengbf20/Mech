@@ -3,7 +3,7 @@
 
 experiment:
   name: imdb_rehearsal_priming_gemma2_2b
-  status: step3_warmup_s0_ok
+  status: step3_warmup_s0_ok   # next: step4 Stage-1 positive (depths 128/256/512)
   notes: >
     Reproduce behavioral rehearsal priming on IMDb with Gemma-2-2B base.
     Conclusions report behavioral relearning speed only; do not claim mechanism.

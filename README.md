@@ -117,7 +117,34 @@ CUDA_VISIBLE_DEVICES=0 python score_eval.py \
   --output outputs/warmup/S0_calib_scored.jsonl
 ```
 
-**第 4 步：Stage 1 正面训练。**候选深度 128/256/512；若过早饱和，只依据校准集改档并在正式三种子前锁定。全局 batch 16 下 8192 条 → 512 优化步。
+**第 4 步：Stage 1 正面训练。**从 \(W_0\) 起，在主实验 8192 条正面影评上全参数 SFT；候选深度 128/256/512（全局 batch 16 → 满跑 512 步）。一次训练在 `--save-depths` 处落盘可评测的合并权重；若校准集上过早饱和，只据此改档，正式三种子前锁定深度。
+```bash
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# 4a. 训练（种子 11 试跑；优化器从 W0 权重新建，不恢复旧态）
+deepspeed --num_gpus=4 train_sft.py --mode imdb \
+  --config config.yaml \
+  --model outputs/warmup/W0 \
+  --data data/splits/main_positive_8192.jsonl \
+  --output outputs/stage1/main_pos_seed11 \
+  --max-steps 512 \
+  --save-depths 128,256,512 \
+  --seed 11
+
+# 4b. 各深度在校准集上生成并打分（判断是否过早饱和；正式深度锁定前只看 calib）
+for D in 128 256 512; do
+  CUDA_VISIBLE_DEVICES=0 python generate_eval.py \
+    --config config.yaml \
+    --model outputs/stage1/main_pos_seed11/depth_${D} \
+    --prompts data/splits/calib_2000.jsonl \
+    --output outputs/stage1/main_pos_seed11/calib_gen_d${D}.jsonl
+  CUDA_VISIBLE_DEVICES=0 python score_eval.py \
+    --config config.yaml \
+    --generations outputs/stage1/main_pos_seed11/calib_gen_d${D}.jsonl \
+    --output outputs/stage1/main_pos_seed11/calib_scored_d${D}.jsonl
+done
+# 比较 outputs/stage1/main_pos_seed11/calib_scored_d*.summary.json 的 positive_rate_S；
+# 若 128/256 已接近饱和，改用更浅档并在正式 [11,23,37] 前写入记录。
+```
 
 **第 5 步：Stage 2 反向训练与匹配。**每 128 步粗评，窗口内逐步评测，\(\lvert S-S_0\rvert<0.005\)。靠近匹配带时每题采至 5 条；仍不可靠则分支不入主比较。[论文匹配协议](https://arxiv.org/html/2605.18309)
 
