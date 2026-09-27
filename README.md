@@ -155,38 +155,51 @@ for D in 128 256 512; do
 done
 ```
 
-**第 5 步：Stage 2 反向训练与匹配。****待跑。**从锁定 Stage 1（`depth_512`）出发，在 `main_negative_8192` 上反向 SFT，并按论文协议层次化匹配 \(S_0=0.261\)（\(|S-S_0|<0.005\)；靠近 \(0.02\) 带时每题 5 条）。
-
-新增脚本：`stage2_run.py`（编排）、`match_checkpoint.py`（打分+选点）；`train_sft.py` 支持 `--save-every`。匹配策略：粗评每 128 步 → 窗口内每 16 步 → 最优点 ±8 逐步；避免存满 128 个整模。
+**第 5 步：Stage 2 反向训练与匹配。****已完成（种子 11）。**从 `depth_512` 出发在 `main_negative_8192` 上反向 SFT；粗/中/细匹配后选中 **`depth_34`**，校准集 n=5 得分 \(S=0.2638\)，\(|S-S_0|=0.0028<0.005\)（\(S_0=0.261\)）。产物：`outputs/stage2/main_neg_seed11/MATCHED.json`、`depth_34/`。
 
 ```bash
-cd /home/u-shengbf/mech
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-# 建议空闲卡：与第 4 步一致用 4–7
-GPUS=4,5,6,7
-SCORE_GPU=7
-
-# 一键：coarse → medium → fine（已匹配则提前结束）
+# 已跑通的一键命令（可续跑）
+GPUS=4,5,6,7; SCORE_GPU=7
 python stage2_run.py --phase all \
   --stage1 outputs/stage1/main_pos_seed11/depth_512 \
   --data data/splits/main_negative_8192.jsonl \
   --output outputs/stage2/main_neg_seed11 \
-  --seed 11 \
-  --max-steps 512 \
+  --seed 11 --max-steps 512 \
   --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU --num-gpus 4
-
-# 或分阶段（可断点续跑；已有 depth_* 会跳过训练，加 --force-retrain 可重训）
-python stage2_run.py --phase coarse --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU
-python stage2_run.py --phase medium --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU
-python stage2_run.py --phase fine   --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU
-
-# 仅对已有 depth_* 重新匹配 / 出报告
-python stage2_run.py --phase match --gen-gpus $GPUS --score-gpu $SCORE_GPU
 ```
 
-成功标志：`outputs/stage2/main_neg_seed11/MATCHED.json` 中 `matched=true`，选用 `depth_<selected_step>/`。若最终仍 `matched=false`，该分支不入主比较（§1.0）。[论文匹配协议](https://arxiv.org/html/2605.18309)
+**第 6 步：Stage 3 同步比较。****待跑。**两臂在同一套正面数据 `main_positive_8192`、同一种子下再学习：
+- **primed**：从 Stage-2 匹配点 `depth_34` 出发
+- **control**：从 \(W_0\) 出发（首次学正面）
 
-**第 6 步：Stage 3 同步比较。**已匹配检查点与 \(W_0\) 对照；前 128 步每 8 步评、之后每 32 步。
+评测日程：前 128 步每 **8** 步，之后每 **32** 步；并评 step 0。试跑窗口默认 **128** 步（`trial_metric_window_steps`）。主指标：\(\Delta S(t)=S_{\mathrm{primed}}(t)-S_{\mathrm{control}}(t)\) 在窗口上的梯形面积（见 `curve_report.json`）。
+
+```bash
+cd /home/u-shengbf/mech
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+GPUS=4,5,6,7
+SCORE_GPU=7
+
+# 一键：双臂训练 → 校准集曲线 → 出报告（默认 max-steps=128）
+python stage3_run.py --phase all \
+  --seed 11 \
+  --primed outputs/stage2/main_neg_seed11/depth_34 \
+  --control outputs/warmup/W0 \
+  --data data/splits/main_positive_8192.jsonl \
+  --output outputs/stage3/seed11 \
+  --max-steps 128 \
+  --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU --num-gpus 4
+
+# 分阶段 / 断点续跑
+python stage3_run.py --phase train --seed 11 --train-gpus $GPUS --num-gpus 4
+python stage3_run.py --phase eval  --seed 11 --gen-gpus $GPUS --score-gpu $SCORE_GPU --num-gpus 4
+python stage3_run.py --phase analyze --seed 11
+
+# 显存/磁盘紧时：评完可删中间 depth_*（保留最后一步）
+# python stage3_run.py --phase all ... --delete-ckpts-after-eval
+```
+
+成功标志：`outputs/stage3/seed11/curve_report.json`（含 `area_delta_S`）；分臂曲线在 `outputs/stage3/seed11/eval/{primed,control}/curve.json`。试跑 128 步时每臂约存 16 个合并权重（≈16×6GB，注意磁盘）。
 
 **第 7 步：重复并出结论。**种子 `[11,23,37]`；主指标为基线调整后曲线面积（试跑窗口 128）；同步互斥对照。结论仅行为层加速（§1.0）。
 

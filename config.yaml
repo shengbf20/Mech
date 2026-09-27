@@ -3,7 +3,7 @@
 
 experiment:
   name: imdb_rehearsal_priming_gemma2_2b
-  status: step4_done_next_stage2
+  status: step5_matched_depth34_next_stage3
   notes: >
     Reproduce behavioral rehearsal priming on IMDb with Gemma-2-2B base.
     Conclusions report behavioral relearning speed only; do not claim mechanism.
