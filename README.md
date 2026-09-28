@@ -168,19 +168,34 @@ python stage2_run.py --phase all \
   --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU --num-gpus 4
 ```
 
-**第 6 步：Stage 3 同步比较。****待跑。**两臂在同一套正面数据 `main_positive_8192`、同一种子下再学习：
-- **primed**：从 Stage-2 匹配点 `depth_34` 出发
-- **control**：从 \(W_0\) 出发（首次学正面）
+**第 6 步：Stage 3 同步比较。****已完成（种子 11 试跑）。**两臂同数据 `main_positive_8192`、同种子 11、窗口 128 步（每 8 步评 + step 0）：
+- **primed**：`outputs/stage2/main_neg_seed11/depth_34`
+- **control**：`outputs/warmup/W0`
 
-评测日程：前 128 步每 **8** 步，之后每 **32** 步；并评 step 0。试跑窗口默认 **128** 步（`trial_metric_window_steps`）。主指标：\(\Delta S(t)=S_{\mathrm{primed}}(t)-S_{\mathrm{control}}(t)\) 在窗口上的梯形面积（见 `curve_report.json`）。
+产物：`outputs/stage3/seed11/curve_report.json`，分臂曲线 `eval/{primed,control}/curve.json`。
+
+| step | \(S_{\mathrm{primed}}\) | \(S_{\mathrm{control}}\) | \(\Delta\) |
+|---:|---:|---:|---:|
+| 0 | 0.259 | 0.261 | −0.002 |
+| 24 | 0.292 | 0.244 | +0.048 |
+| 40 | 0.342 | 0.242 | +0.101 |
+| 64 | 0.350 | 0.254 | +0.096 |
+| 96 | 0.336 | 0.300 | +0.036 |
+| 128 | 0.321 | 0.298 | +0.023 |
+
+主指标（梯形面积，窗口 \([0,128]\)）：
+
+| 指标 | 值 |
+|---|---:|
+| `area_delta_S`（primed−control） | **+6.972** |
+| primed 相对自身 \(S(0)\) 面积 | +8.234 |
+| control 相对自身 \(S(0)\) 面积 | +1.006 |
 
 ```bash
 cd /home/u-shengbf/mech
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 GPUS=4,5,6,7
 SCORE_GPU=7
-
-# 一键：双臂训练 → 校准集曲线 → 出报告（默认 max-steps=128）
 python stage3_run.py --phase all \
   --seed 11 \
   --primed outputs/stage2/main_neg_seed11/depth_34 \
@@ -189,18 +204,31 @@ python stage3_run.py --phase all \
   --output outputs/stage3/seed11 \
   --max-steps 128 \
   --train-gpus $GPUS --gen-gpus $GPUS --score-gpu $SCORE_GPU --num-gpus 4
-
-# 分阶段 / 断点续跑
-python stage3_run.py --phase train --seed 11 --train-gpus $GPUS --num-gpus 4
-python stage3_run.py --phase eval  --seed 11 --gen-gpus $GPUS --score-gpu $SCORE_GPU --num-gpus 4
-python stage3_run.py --phase analyze --seed 11
-
-# 显存/磁盘紧时：评完可删中间 depth_*（保留最后一步）
-# python stage3_run.py --phase all ... --delete-ckpts-after-eval
 ```
 
-成功标志：`outputs/stage3/seed11/curve_report.json`（含 `area_delta_S`）；分臂曲线在 `outputs/stage3/seed11/eval/{primed,control}/curve.json`。试跑 128 步时每臂约存 16 个合并权重（≈16×6GB，注意磁盘）。
+**第 7 步：重复并出结论。****暂缓（先不进入）。**原计划种子 `[11,23,37]` 与互斥对照；当前仅完成种子 11 试跑，三种子与互斥臂留待后续。
 
-**第 7 步：重复并出结论。**种子 `[11,23,37]`；主指标为基线调整后曲线面积（试跑窗口 128）；同步互斥对照。结论仅行为层加速（§1.0）。
+## 5. 实验结论（种子 11 试跑；截至 Stage 3）
+
+> **结论边界（§1.0）：**只陈述是否观察到行为层面的再次学习加速；不据此证明机制；单种子、校准集 n=1 采样，不作正式三种子推断。
+
+### 5.1 流程是否跑通
+**是。**通路 → Alpaca 预热 \(W_0\)（\(S_0=0.261\)）→ Stage 1 正面（锁深 512）→ Stage 2 负面并匹配到 \(S_0\)（`depth_34`，n=5：\(S=0.2638\)，\(|S-S_0|=0.0028\)）→ Stage 3 双臂同步再学正面，曲线与主指标已落盘。
+
+### 5.2 是否观察到 rehearsal priming（行为层）
+**是（本试跑支持）。**在起点几乎对齐（primed \(S(0)=0.259\)，control \(S(0)=0.261\)）的前提下：
+- primed 在约 16–40 步内快速抬升并在 ~0.33–0.35 平台；
+- control 前几十步几乎不涨甚至略降，约 72 步后才缓慢接近 ~0.30；
+- 窗口内 `area_delta_S = +6.97 > 0`，primed 相对自身起点的曲线面积约为 control 的约 **8×**。
+
+这与「有 Stage 1 经历的模型，在分数回到共同起点后再学正面时，曲线更快/更高」的行为现象一致。
+
+### 5.3 不声称什么
+- 不声称已验证论文中的 Rebound / Driving Force 或后验印记机制；
+- 不声称结果在种子 `[23,37]` 或互斥样本对照上稳健（第 7 步未做）；
+- 不从 IMDb 代理任务外推到安全对齐。
+
+### 5.4 当前状态
+**暂停于第 6 步完成态；第 7 步（多种子 + 互斥对照）暂缓。**可复核原始结果目录：`outputs/warmup/`、`outputs/stage1/main_pos_seed11/`、`outputs/stage2/main_neg_seed11/`、`outputs/stage3/seed11/`。
 
 这条路线主要依据你提供的 :codex-file-citation{path="D:\sbf\0 NJU课程资料\Creations\Alignment Dynamics\Alignment Dynamics in LLM Fine-Tuning.pdf" purpose="source"}。它能检验论文报告的**行为现象**；即使观察成功，也还需要额外的表示或梯度实验才能验证论文提出的具体机制。

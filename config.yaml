@@ -3,11 +3,12 @@
 
 experiment:
   name: imdb_rehearsal_priming_gemma2_2b
-  status: step5_matched_depth34_next_stage3
+  status: step6_seed11_done_step7_deferred
   notes: >
     Reproduce behavioral rehearsal priming on IMDb with Gemma-2-2B base.
     Conclusions report behavioral relearning speed only; do not claim mechanism.
-    Stage1 seed11 calib S: d128=0.292 d256=0.345 d512=0.313 (S0=0.261); lock depth=512.
+    Seed11 trial: Stage2 matched depth_34 (S=0.2638); Stage3 area_delta_S=+6.972 (priming supported).
+    Step7 (seeds 23/37 + disjoint) deferred.
 
 # --- §1.0 research decisions ---
 research:
